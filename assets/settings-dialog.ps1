@@ -18,7 +18,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$TypeOutput,
     [Parameter(Mandatory = $true)]
-    [string]$StreamOutput
+    [string]$StreamOutput,
+    [Parameter(Mandatory = $true)]
+    [string]$AllowTerminalOutput
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,7 +31,7 @@ Add-Type -AssemblyName System.Drawing
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Hermes Settings"
 $form.StartPosition = "CenterScreen"
-$form.ClientSize = New-Object System.Drawing.Size(680, 532)
+$form.ClientSize = New-Object System.Drawing.Size(680, 564)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.MinimizeBox = $false
@@ -292,6 +294,7 @@ function Complete-Save {
     $autoPunctuationValue = if ($autoPunctuationBox.Checked) { "true" } else { "false" }
     $typeOutputValue = if ($typeOutputBox.Checked) { "true" } else { "false" }
     $streamOutputValue = if ($streamOutputBox.Checked) { "true" } else { "false" }
+    $allowTerminalOutputValue = if ($allowTerminalOutputBox.Checked) { "true" } else { "false" }
 
     $tomlLines = @(
         "model_path = `"$($(Escape-TomlString $modelPath))`"",
@@ -300,6 +303,7 @@ function Complete-Save {
         "auto_punctuation = $autoPunctuationValue",
         "type_output = $typeOutputValue",
         "stream_output = $streamOutputValue",
+        "allow_terminal_output = $allowTerminalOutputValue",
         "language = `"$($(Escape-TomlString $language))`"",
         "",
         "[hotkey]",
@@ -339,6 +343,7 @@ $minRecordMsBox = Add-TextField "Min Record (ms)" $MinRecordMs.ToString()
 $autoPunctuationBox = Add-CheckField "Auto Punctuation" ($AutoPunctuation.ToLowerInvariant() -eq "true")
 $typeOutputBox = Add-CheckField "Type Output" ($TypeOutput.ToLowerInvariant() -eq "true")
 $streamOutputBox = Add-CheckField "Stream Output While Recording" ($StreamOutput.ToLowerInvariant() -eq "true")
+$allowTerminalOutputBox = Add-CheckField "Allow Terminal Output (Ctrl+Shift+V)" ($AllowTerminalOutput.ToLowerInvariant() -eq "true")
 
 $note = New-Object System.Windows.Forms.Label
 $note.Text = "Choose a model variant here. Hermes runs whisper-cli in CPU-only mode and stores standard models in your local app data folder."

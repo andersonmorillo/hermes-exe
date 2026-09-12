@@ -12,7 +12,7 @@ use crate::config::HotkeyConfig;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HotkeyMode {
     F8Hold,
-    RightCtrlRightShiftHold,
+    CtrlShiftHold,
 }
 
 #[derive(Debug, Clone)]
@@ -42,13 +42,13 @@ impl HotkeyListener {
             .name("hotkey-listener".to_string())
             .spawn(move || {
                 let f8_down = Arc::new(AtomicBool::new(false));
-                let rctrl_down = Arc::new(AtomicBool::new(false));
-                let rshift_down = Arc::new(AtomicBool::new(false));
+                let ctrl_down = Arc::new(AtomicBool::new(false));
+                let shift_down = Arc::new(AtomicBool::new(false));
                 let ptt_down = Arc::new(AtomicBool::new(false));
 
                 let f8_ref = Arc::clone(&f8_down);
-                let rctrl_ref = Arc::clone(&rctrl_down);
-                let rshift_ref = Arc::clone(&rshift_down);
+                let ctrl_ref = Arc::clone(&ctrl_down);
+                let shift_ref = Arc::clone(&shift_down);
                 let ptt_ref = Arc::clone(&ptt_down);
                 let tx_ref = tx.clone();
                 let listen_result = listen(move |event| match event.event_type {
@@ -64,10 +64,10 @@ impl HotkeyListener {
                             return;
                         }
 
-                        if is_right_ctrl_key(key) {
-                            rctrl_ref.store(true, Ordering::SeqCst);
-                            if hotkey_mode.effective() == HotkeyMode::RightCtrlRightShiftHold
-                                && rshift_ref.load(Ordering::SeqCst)
+                        if is_ctrl_key(key) {
+                            ctrl_ref.store(true, Ordering::SeqCst);
+                            if hotkey_mode.effective() == HotkeyMode::CtrlShiftHold
+                                && shift_ref.load(Ordering::SeqCst)
                             {
                                 let was_pressed = ptt_ref.swap(true, Ordering::SeqCst);
                                 if !was_pressed {
@@ -77,10 +77,10 @@ impl HotkeyListener {
                             return;
                         }
 
-                        if is_right_shift_key(key) {
-                            rshift_ref.store(true, Ordering::SeqCst);
-                            if hotkey_mode.effective() == HotkeyMode::RightCtrlRightShiftHold
-                                && rctrl_ref.load(Ordering::SeqCst)
+                        if is_shift_key(key) {
+                            shift_ref.store(true, Ordering::SeqCst);
+                            if hotkey_mode.effective() == HotkeyMode::CtrlShiftHold
+                                && ctrl_ref.load(Ordering::SeqCst)
                             {
                                 let was_pressed = ptt_ref.swap(true, Ordering::SeqCst);
                                 if !was_pressed {
@@ -99,8 +99,8 @@ impl HotkeyListener {
                             return;
                         }
 
-                        if is_right_ctrl_key(key) {
-                            rctrl_ref.store(false, Ordering::SeqCst);
+                        if is_ctrl_key(key) {
+                            ctrl_ref.store(false, Ordering::SeqCst);
                             let was_pressed = ptt_ref.swap(false, Ordering::SeqCst);
                             if was_pressed {
                                 let _ = tx_ref.send(HotkeyEvent::Released);
@@ -108,8 +108,8 @@ impl HotkeyListener {
                             return;
                         }
 
-                        if is_right_shift_key(key) {
-                            rshift_ref.store(false, Ordering::SeqCst);
+                        if is_shift_key(key) {
+                            shift_ref.store(false, Ordering::SeqCst);
                             let was_pressed = ptt_ref.swap(false, Ordering::SeqCst);
                             if was_pressed {
                                 let _ = tx_ref.send(HotkeyEvent::Released);
@@ -155,29 +155,13 @@ impl HotkeyConfig {
             return HotkeyModeConfig::Known(HotkeyMode::F8Hold);
         }
 
-        let modifier_has_rctrl = modifier_parts.iter().any(|part| {
-            matches_token(
-                part,
-                &["rctrl", "rightctrl", "right_control", "control_right"],
-            )
-        });
-        let modifier_has_rshift = modifier_parts.iter().any(|part| {
-            matches_token(
-                part,
-                &["rshift", "rightshift", "right_shift", "shift_right"],
-            )
-        });
-        let key_is_rctrl = matches_token(
-            &key_value,
-            &["rctrl", "rightctrl", "right_control", "control_right"],
-        );
-        let key_is_rshift = matches_token(
-            &key_value,
-            &["rshift", "rightshift", "right_shift", "shift_right"],
-        );
+        let modifier_has_ctrl = modifier_parts.iter().any(|part| is_ctrl_token(part));
+        let modifier_has_shift = modifier_parts.iter().any(|part| is_shift_token(part));
+        let key_is_ctrl = is_ctrl_token(&key_value);
+        let key_is_shift = is_shift_token(&key_value);
 
-        if (modifier_has_rctrl && key_is_rshift) || (modifier_has_rshift && key_is_rctrl) {
-            return HotkeyModeConfig::Known(HotkeyMode::RightCtrlRightShiftHold);
+        if (modifier_has_ctrl && key_is_shift) || (modifier_has_shift && key_is_ctrl) {
+            return HotkeyModeConfig::Known(HotkeyMode::CtrlShiftHold);
         }
 
         HotkeyModeConfig::Unknown
@@ -203,12 +187,47 @@ impl HotkeyModeConfig {
     }
 }
 
-fn is_right_ctrl_key(key: Key) -> bool {
-    key == Key::ControlRight
+fn is_ctrl_key(key: Key) -> bool {
+    matches!(key, Key::ControlLeft | Key::ControlRight)
 }
 
-fn is_right_shift_key(key: Key) -> bool {
-    key == Key::ShiftRight
+fn is_shift_key(key: Key) -> bool {
+    matches!(key, Key::ShiftLeft | Key::ShiftRight)
+}
+
+fn is_ctrl_token(value: &str) -> bool {
+    matches_token(
+        value,
+        &[
+            "ctrl",
+            "control",
+            "lctrl",
+            "rctrl",
+            "leftctrl",
+            "rightctrl",
+            "left_control",
+            "right_control",
+            "control_left",
+            "control_right",
+        ],
+    )
+}
+
+fn is_shift_token(value: &str) -> bool {
+    matches_token(
+        value,
+        &[
+            "shift",
+            "lshift",
+            "rshift",
+            "leftshift",
+            "rightshift",
+            "left_shift",
+            "right_shift",
+            "shift_left",
+            "shift_right",
+        ],
+    )
 }
 
 fn is_f8_key(key: Key) -> bool {

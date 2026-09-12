@@ -1,11 +1,17 @@
+use std::thread;
+use std::time::Duration;
+
 use anyhow::Result;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use windows::core::HSTRING;
+use tracing::warn;
+use windows::core::{w, HSTRING};
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
+use windows::Win32::System::Console::GetConsoleWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MessageBoxW, PeekMessageW, TranslateMessage, MB_ICONERROR, MB_OK, MSG,
-    PM_REMOVE,
+    DispatchMessageW, GetClassNameW, GetForegroundWindow, GetWindowTextW, MessageBoxW, PeekMessageW,
+    SetForegroundWindow, TranslateMessage, MB_ICONERROR, MB_OK, MSG, PM_REMOVE,
 };
 
 mod settings_dialog;
@@ -92,6 +98,115 @@ impl WindowsTray {
             TrayStatus::Error => "Hermes: Error",
         };
         let _ = self._tray.set_tooltip(Some(label.to_string()));
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ForegroundTarget {
+    hwnd: HWND,
+}
+
+impl ForegroundTarget {
+    pub fn restore(&self) {
+        unsafe {
+            if !SetForegroundWindow(self.hwnd).as_bool() {
+                warn!("failed to restore focus to the selected window");
+            }
+        }
+        thread::sleep(Duration::from_millis(35));
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        is_terminal_window(self.hwnd)
+    }
+}
+
+pub fn is_terminal_window(hwnd: HWND) -> bool {
+    window_class(hwnd).is_some_and(|class| is_terminal_window_class(&class))
+        || window_title(hwnd).is_some_and(|title| is_terminal_window_title(&title))
+}
+
+fn window_class(hwnd: HWND) -> Option<String> {
+    unsafe {
+        let mut buffer = [0u16; 256];
+        let len = GetClassNameW(hwnd, &mut buffer);
+        if len == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(
+            &buffer[..len.min(buffer.len() as i32) as usize],
+        ))
+    }
+}
+
+fn is_terminal_window_class(class: &str) -> bool {
+    let class = class.to_ascii_lowercase();
+    class.contains("console")
+        || class.contains("cascadia")
+        || class.contains("terminal")
+        || class.contains("mintty")
+}
+
+fn window_title(hwnd: HWND) -> Option<String> {
+    unsafe {
+        let mut buffer = [0u16; 512];
+        let len = GetWindowTextW(hwnd, &mut buffer);
+        if len == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(
+            &buffer[..len.min(buffer.len() as i32) as usize],
+        ))
+    }
+}
+
+fn is_terminal_window_title(title: &str) -> bool {
+    let title = title.to_ascii_lowercase();
+    [
+        "terminal",
+        "powershell",
+        "wsl",
+        "cmd.exe",
+        "command prompt",
+        "bash",
+        "zsh",
+        "fish",
+    ]
+    .iter()
+    .any(|hint| title.contains(hint))
+}
+
+pub fn capture_foreground_target(allow_terminal: bool) -> Option<ForegroundTarget> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+
+        let console = GetConsoleWindow();
+        if !console.0.is_null() && hwnd == console {
+            return None;
+        }
+
+        if !allow_terminal && is_terminal_window(hwnd) {
+            return None;
+        }
+
+        Some(ForegroundTarget { hwnd })
+    }
+}
+
+pub fn play_recording_start_beep() {
+    play_system_sound(w!("SystemAsterisk"));
+}
+
+pub fn play_recording_stop_beep() {
+    play_system_sound(w!("SystemDefault"));
+}
+
+fn play_system_sound(alias: windows::core::PCWSTR) {
+    unsafe {
+        let _ = PlaySoundW(alias, None, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
     }
 }
 

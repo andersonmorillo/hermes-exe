@@ -9,9 +9,11 @@ use tracing::{error, info, warn};
 use crate::audio::capture::{AudioCapture, AudioCaptureSession};
 use crate::config::AppConfig;
 use crate::input::hotkey::{HotkeyEvent, HotkeyListener};
-use crate::output::typing::TextTyper;
+use crate::output::typing::{PasteStyle, TextTyper};
 use crate::platform::windows::{
-    open_settings_dialog, pump_message_queue, show_error_dialog, TrayStatus, WindowsTray,
+    capture_foreground_target, open_settings_dialog, play_recording_start_beep,
+    play_recording_stop_beep, pump_message_queue, show_error_dialog, ForegroundTarget,
+    TrayStatus, WindowsTray,
 };
 use crate::stt::engine::{DecodeOptions, WhisperCliTranscriber};
 
@@ -42,6 +44,7 @@ pub fn run(config: AppConfig) -> Result<()> {
     let mut sentence_stream: Option<SentenceStreamingTranscriber> = None;
     let live_typing = config.type_output && config.stream_output;
     let mut typed_output = String::new();
+    let mut recording_target: Option<ForegroundTarget> = None;
 
     loop {
         pump_message_queue();
@@ -83,6 +86,20 @@ pub fn run(config: AppConfig) -> Result<()> {
                         match capture.start_session() {
                             Ok(session) => {
                                 typed_output.clear();
+                                recording_target =
+                                    capture_foreground_target(config.allow_terminal_output);
+                                if recording_target.is_none() {
+                                    let hint = if config.allow_terminal_output {
+                                        "click a text field before holding Right Ctrl+Right Shift"
+                                    } else {
+                                        "click a text field (not a terminal) before holding Right Ctrl+Right Shift, or enable allow_terminal_output"
+                                    };
+                                    warn!("no text target captured; {hint}");
+                                    eprintln!(
+                                        "[hermes] no text target captured; transcript will print here only"
+                                    );
+                                    let _ = io::stdout().flush();
+                                }
                                 current_session = Some(session);
                                 sentence_stream = Some(SentenceStreamingTranscriber::new(
                                     transcriber.clone(),
@@ -90,6 +107,7 @@ pub fn run(config: AppConfig) -> Result<()> {
                                 ));
                                 state.set_phase(AppPhase::Recording);
                                 tray.set_status(TrayStatus::Recording);
+                                play_recording_start_beep();
                                 println!("[recording] started");
                                 let _ = io::stdout().flush();
                             }
@@ -106,6 +124,7 @@ pub fn run(config: AppConfig) -> Result<()> {
                 }
                 HotkeyEvent::Released => {
                     if let Some(session) = current_session.take() {
+                        play_recording_stop_beep();
                         println!("[recording] stopped");
                         let _ = io::stdout().flush();
                         let captured =
@@ -125,6 +144,7 @@ pub fn run(config: AppConfig) -> Result<()> {
                                 captured.duration_ms, config.min_record_ms
                             );
                             sentence_stream = None;
+                            recording_target = None;
                             state.set_phase(AppPhase::Idle);
                             tray.set_status(TrayStatus::Idle);
                             continue;
@@ -160,15 +180,17 @@ pub fn run(config: AppConfig) -> Result<()> {
                         }
 
                         if config.type_output && !cleaned.is_empty() {
-                            let to_type = if live_typing && !typed_output.is_empty() {
-                                remainder_after_typed(&typed_output, &cleaned)
-                            } else {
-                                cleaned.clone()
-                            };
+                            let to_type = release_typing_text(
+                                live_typing,
+                                &typed_output,
+                                &cleaned,
+                            );
                             if !to_type.is_empty() {
                                 state.set_phase(AppPhase::Typing);
                                 tray.set_status(TrayStatus::Typing);
-                                if let Err(err) = typer.type_text(&to_type) {
+                                if let Err(err) =
+                                    type_into_target(&typer, &to_type, recording_target.as_ref())
+                                {
                                     error!("failed to type output text: {err:#}");
                                     state.set_phase(AppPhase::Error);
                                     tray.set_status(TrayStatus::Error);
@@ -176,6 +198,7 @@ pub fn run(config: AppConfig) -> Result<()> {
                                 }
                             }
                         }
+                        recording_target = None;
                         state.set_phase(AppPhase::Idle);
                         tray.set_status(TrayStatus::Idle);
                     }
@@ -200,7 +223,9 @@ pub fn run(config: AppConfig) -> Result<()> {
                     };
                     state.set_phase(AppPhase::Typing);
                     tray.set_status(TrayStatus::Typing);
-                    if let Err(err) = typer.type_text(&to_type) {
+                    if let Err(err) =
+                        type_into_target(&typer, &to_type, recording_target.as_ref())
+                    {
                         error!("failed to stream output text: {err:#}");
                         state.set_phase(AppPhase::Error);
                         tray.set_status(TrayStatus::Error);
@@ -302,4 +327,41 @@ fn print_transcript_to_terminal(text: &str, latency_ms: u128) {
     info!("transcribed in {} ms", latency_ms);
     println!("[{latency_ms}ms] {text}");
     let _ = io::stdout().flush();
+}
+
+fn release_typing_text(live_typing: bool, typed_output: &str, cleaned: &str) -> String {
+    if !live_typing || typed_output.is_empty() {
+        return cleaned.to_string();
+    }
+
+    let remainder = remainder_after_typed(typed_output, cleaned);
+    if remainder.is_empty()
+        && normalize_typing_text(typed_output) != normalize_typing_text(cleaned)
+    {
+        return cleaned.to_string();
+    }
+
+    remainder
+}
+
+fn normalize_typing_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn type_into_target(
+    typer: &TextTyper,
+    text: &str,
+    target: Option<&ForegroundTarget>,
+) -> Result<()> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+
+    target.restore();
+    let paste_style = if target.is_terminal() {
+        PasteStyle::Terminal
+    } else {
+        PasteStyle::Standard
+    };
+    typer.type_text(text, paste_style)
 }

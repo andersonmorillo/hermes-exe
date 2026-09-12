@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub auto_punctuation: bool,
     pub type_output: bool,
     pub stream_output: bool,
+    pub allow_terminal_output: bool,
     pub language: String,
 }
 
@@ -41,6 +42,7 @@ impl Default for AppConfig {
             auto_punctuation: true,
             type_output: true,
             stream_output: false,
+            allow_terminal_output: false,
             language: "en".to_string(),
         }
     }
@@ -209,6 +211,7 @@ key = "f8"
     fn default_config_includes_stream_output_default() {
         let config = AppConfig::default();
         assert!(!config.stream_output);
+        assert!(!config.allow_terminal_output);
     }
 
     #[test]

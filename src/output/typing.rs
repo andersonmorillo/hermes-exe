@@ -11,6 +11,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteStyle {
+    Standard,
+    Terminal,
+}
+
 pub struct TextTyper;
 
 impl TextTyper {
@@ -18,7 +24,7 @@ impl TextTyper {
         Self
     }
 
-    pub fn type_text(&self, text: &str) -> Result<()> {
+    pub fn type_text(&self, text: &str, paste_style: PasteStyle) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -26,7 +32,11 @@ impl TextTyper {
         release_modifier_keys()?;
         thread::sleep(Duration::from_millis(8));
 
-        if let Err(err) = paste_from_clipboard(text) {
+        let paste_result = match paste_style {
+            PasteStyle::Standard => paste_from_clipboard(text),
+            PasteStyle::Terminal => paste_terminal_from_clipboard(text),
+        };
+        if let Err(err) = paste_result {
             warn!("clipboard paste failed; falling back to unicode typing: {err:#}");
             type_unicode(text)?;
         }
@@ -48,16 +58,31 @@ fn paste_from_clipboard(text: &str) -> Result<()> {
     set_clipboard(formats::Unicode, text)
         .map_err(|err| anyhow!("failed to set clipboard text: {err:?}"))?;
     thread::sleep(Duration::from_millis(12));
+    send_chord_paste(&[VK_CONTROL], "clipboard paste key events")
+}
 
-    let ctrl = VK_CONTROL;
+fn paste_terminal_from_clipboard(text: &str) -> Result<()> {
+    set_clipboard(formats::Unicode, text)
+        .map_err(|err| anyhow!("failed to set clipboard text: {err:?}"))?;
+    thread::sleep(Duration::from_millis(12));
+    send_chord_paste(
+        &[VK_CONTROL, VK_SHIFT],
+        "terminal clipboard paste key events",
+    )
+}
+
+fn send_chord_paste(modifiers: &[VIRTUAL_KEY], label: &str) -> Result<()> {
     let v = VIRTUAL_KEY('V' as u16);
-    let inputs = [
-        virtual_key_input(ctrl, false),
-        virtual_key_input(v, false),
-        virtual_key_input(v, true),
-        virtual_key_input(ctrl, true),
-    ];
-    send_inputs(&inputs, "clipboard paste key events")
+    let mut inputs = Vec::with_capacity(modifiers.len() * 2 + 2);
+    for modifier in modifiers {
+        inputs.push(virtual_key_input(*modifier, false));
+    }
+    inputs.push(virtual_key_input(v, false));
+    inputs.push(virtual_key_input(v, true));
+    for modifier in modifiers.iter().rev() {
+        inputs.push(virtual_key_input(*modifier, true));
+    }
+    send_inputs(&inputs, label)
 }
 
 fn send_inputs(inputs: &[INPUT], label: &str) -> Result<()> {

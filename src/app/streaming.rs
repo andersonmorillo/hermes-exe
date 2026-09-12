@@ -255,7 +255,15 @@ impl SentenceAccumulator {
             return;
         }
         self.drained_live_prefix.clone_from(&streamable);
-        self.pending_stream_delta = Some(delta.to_string());
+        match &mut self.pending_stream_delta {
+            Some(existing) => {
+                if !existing.is_empty() {
+                    existing.push(' ');
+                }
+                existing.push_str(delta);
+            }
+            None => self.pending_stream_delta = Some(delta.to_string()),
+        }
     }
 
     fn finish(&self, transcript: &str) -> String {

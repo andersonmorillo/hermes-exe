@@ -45,6 +45,8 @@ pub fn open_settings_dialog(config: &AppConfig) -> Result<Option<AppConfig>> {
             .arg(config.type_output.to_string())
             .arg("-StreamOutput")
             .arg(config.stream_output.to_string())
+            .arg("-AllowTerminalOutput")
+            .arg(config.allow_terminal_output.to_string())
             .output()
             .context("failed to launch settings dialog via PowerShell")
     })();

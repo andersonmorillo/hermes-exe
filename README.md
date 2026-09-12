@@ -218,6 +218,7 @@ Current settings:
 - `auto_punctuation`
 - `type_output`
 - `stream_output`
+- `allow_terminal_output`
 - `language`
 
 Default values are defined in `src/config.rs`.
@@ -237,7 +238,17 @@ The settings dialog can also download model files through Python if `py` or `pyt
 Supported hotkey modes in the current implementation:
 
 - `none + f8`
-- `rctrl + rshift`
+- `ctrl + shift` (left or right Ctrl and Shift)
+
+Example Ctrl+Shift config:
+
+```toml
+[hotkey]
+modifier = "ctrl"
+key = "shift"
+```
+
+Hold both keys together to record; release both (either key up ends the recording).
 
 Unsupported hotkey combinations currently fall back to `F8`.
 
@@ -250,6 +261,7 @@ min_record_ms = 200
 auto_punctuation = true
 type_output = true
 stream_output = false
+allow_terminal_output = false
 language = "en"
 
 [hotkey]
@@ -258,6 +270,8 @@ key = "f8"
 ```
 
 `stream_output` requires `type_output = true` to have any effect. When both are enabled, Hermes types stable completed sentences while the hotkey is held, then types only the untyped remainder when you release. Each chunk goes to whichever window is focused at that moment, so keep the target app focused for best results.
+
+By default Hermes ignores terminal windows as typing targets so transcripts do not land in Cursor or Windows Terminal by accident. Set `allow_terminal_output = true` to dictate into a terminal; Hermes pastes with **Ctrl+Shift+V** instead of Ctrl+V.
 
 ## Running
 
@@ -380,4 +394,5 @@ If the app starts but no text appears:
 - confirm the target app accepts simulated paste or keyboard input
 - click the target app so it is focused before holding the hotkey
 - for live typing, set `stream_output = true` and restart Hermes after changing settings
+- to dictate into a terminal, set `allow_terminal_output = true`, click the terminal first, then hold the hotkey
 - keep the console visible and watch for runtime errors
