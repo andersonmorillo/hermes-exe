@@ -360,6 +360,100 @@ def cmd_ensure_runtime(args: argparse.Namespace) -> None:
     print(f"Runtime saved to: {runtime_dir}")
 
 
+def _add_user_path(directory: Path) -> bool:
+    if platform.system() != "Windows":
+        raise ToolingError("PATH setup is supported on Windows only.")
+
+    directory_text = str(directory.resolve())
+    try:
+        import winreg
+    except ImportError as error:
+        raise ToolingError("Could not import winreg for PATH setup.") from error
+
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        "Environment",
+        0,
+        winreg.KEY_READ | winreg.KEY_WRITE,
+    ) as key:
+        try:
+            current, _value_type = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            current = ""
+
+        parts = [part for part in current.split(";") if part]
+        if directory_text in parts:
+            return False
+
+        new_path = ";".join([*parts, directory_text])
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
+        return True
+
+
+def cmd_setup(args: argparse.Namespace) -> None:
+    if platform.system() != "Windows":
+        raise ToolingError("Hermes setup is Windows-only.")
+
+    if shutil.which("cargo") is None:
+        raise ToolingError(
+            "cargo was not found on PATH. Install Rust from https://rustup.rs, "
+            "then reopen your terminal and run setup again."
+        )
+
+    release_dir = REPO_ROOT / "target" / "release"
+    runtime_dir = release_dir / "whisper-runtime"
+    exe_path = release_dir / "hermes.exe"
+
+    if not args.skip_build:
+        cmd_build(args)
+
+    if not args.skip_runtime:
+        cmd_ensure_runtime(
+            argparse.Namespace(
+                runtime_dir=str(runtime_dir),
+                tag=None,
+                asset_name=None,
+                force=False,
+            )
+        )
+
+    if not args.skip_model:
+        try:
+            cmd_download_model(
+                argparse.Namespace(
+                    variant=args.model_variant,
+                    url=None,
+                    output=None,
+                    force=False,
+                )
+            )
+        except ToolingError as error:
+            if "already exists" in str(error):
+                print(str(error))
+            else:
+                raise
+
+    if not exe_path.exists():
+        raise ToolingError(f"Build did not produce {exe_path}")
+
+    if args.add_path:
+        if _add_user_path(release_dir):
+            print(f"Added to user PATH: {release_dir}")
+            print("Open a new terminal to run `hermes.exe` from any folder.")
+        else:
+            print(f"Already on user PATH: {release_dir}")
+
+    print("")
+    print("Running diagnostics...")
+    _run_command([str(exe_path), "--diagnose"])
+
+    print("")
+    print("Setup complete.")
+    print(f"Run now: {exe_path}")
+    if args.add_path:
+        print("After opening a new terminal: hermes.exe")
+
+
 def cmd_install_startup(args: argparse.Namespace) -> None:
     exe_path = _repo_path(args.exe)
     if not exe_path.exists():
@@ -476,6 +570,38 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    parser_setup = subparsers.add_parser(
+        "setup",
+        help="Build Hermes, fetch runtime/model, and optionally add target/release to user PATH.",
+    )
+    parser_setup.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Skip cargo build --release.",
+    )
+    parser_setup.add_argument(
+        "--skip-runtime",
+        action="store_true",
+        help="Skip whisper.cpp runtime download.",
+    )
+    parser_setup.add_argument(
+        "--skip-model",
+        action="store_true",
+        help="Skip default model download.",
+    )
+    parser_setup.add_argument(
+        "--model-variant",
+        choices=sorted(MODEL_VARIANTS.keys()),
+        default="base.en",
+        help="Model variant to download during setup (default: base.en).",
+    )
+    parser_setup.add_argument(
+        "--no-add-path",
+        action="store_true",
+        help="Do not add target/release to the user PATH.",
+    )
+    parser_setup.set_defaults(func=cmd_setup, add_path=True)
+
     parser_build = subparsers.add_parser("build", help="Build the Rust runtime in release mode.")
     parser_build.set_defaults(func=cmd_build)
 
@@ -577,6 +703,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    if getattr(args, "no_add_path", False):
+        args.add_path = False
     try:
         args.func(args)
     except ToolingError as error:

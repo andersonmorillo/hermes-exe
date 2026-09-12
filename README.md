@@ -1,398 +1,172 @@
 # Hermes
 
-Windows-first push-to-talk speech-to-text app in Rust, using local `whisper.cpp` inference through `whisper-cli.exe`.
+**Local push-to-talk dictation for Windows.** Hold a hotkey, speak, and Hermes transcribes with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your machine — then types the text into the window you selected.
 
-## Overview
+MIT licensed. Copyright (c) 2026 John Vithoulkas. See [LICENSE](LICENSE).
 
-`Hermes` is a tray-based Windows app for local voice dictation:
+## What it does
 
-- Hold a hotkey to record
-- Release to transcribe
-- Print the transcript to the console
-- Optionally paste/type the transcript into the focused app
-- Optionally stream completed sentences into the focused app while you are still holding the hotkey
-- Run `whisper-cli` in CPU-only mode for simpler, predictable behavior
+- **Push-to-talk** — hold hotkey to record, release to transcribe
+- **Fully local** — CPU inference via `whisper-cli.exe`; no cloud API
+- **Types for you** — pastes into the focused app (Ctrl+V, or Ctrl+Shift+V in terminals)
+- **Live streaming** — optional word-by-word output while you still hold the hotkey
+- **Audio cues** — beep when recording starts and stops
+- **System tray** — runs in the background with a settings dialog
 
-Current default behavior:
+## Quick start
 
-- Hold `F8` to record
-- Release `F8` to transcribe
-- Type the transcript into the active window when `type_output = true`
-- With `stream_output = true`, type each completed sentence into the focused window during recording; on release, only the remaining tail is typed
+### Clone and set up (recommended for developers)
 
-## Project Layout
-
-- `src/main.rs`: entrypoint, CLI flags, logging setup
-- `src/app.rs`: runtime loop and state transitions
-- `src/audio/capture.rs`: microphone capture and resampling
-- `src/input/hotkey.rs`: global hotkey listener
-- `src/output/typing.rs`: clipboard paste and Unicode typing fallback
-- `src/stt/engine.rs`: `whisper-cli` invocation and runtime/model bootstrap
-- `src/platform/windows/settings_dialog.rs`: PowerShell-backed settings dialog
-- `scripts/ptt_tooling.py`: build, diagnostics, packaging, startup helpers, model download
-- `whisper-runtime/`: expected location for `whisper-cli.exe` and required DLLs
-
-## Requirements
-
-- Windows 10 or 11
-- Python 3.10+
-- A working microphone
-
-For development from source:
-
-- Rust toolchain with `cargo`
-
-Required runtime files in `whisper-runtime/`:
-
-- `whisper-cli.exe`
-- `whisper.dll`
-- `ggml.dll`
-- `ggml-base.dll`
-- `ggml-cpu.dll`
-
-Default config path:
-
-- `%APPDATA%\Hermes\Hermes\config\config.toml`
-
-Default data directory:
-
-- `%LOCALAPPDATA%\Hermes\Hermes\data\`
-
-Default model path:
-
-- `%LOCALAPPDATA%\Hermes\Hermes\data\models\ggml-medium.en.bin`
-
-## Setup
-
-### Quick start
-
-If you are not developing Hermes, download the latest Windows zip from GitHub Releases.
-
-If you already have `hermes.exe`, the normal setup is just:
-
-1. Run `hermes.exe`.
-2. Hermes creates `config.toml` automatically on first launch.
-3. If `whisper-cli.exe` and its DLLs are missing, Hermes tries to download the runtime automatically on startup.
-4. If the selected standard model is missing, Hermes can download it automatically when you transcribe for the first time or when you save settings.
-5. Use the tray menu or `hermes.exe --settings` to adjust model, hotkey, and typing behavior.
-
-For most users, that is enough. The main external requirement is that `py` or `python` is available on `PATH`, because Hermes uses an embedded Python helper for runtime and model downloads.
-
-### Build from source
+**Requirements:** Windows 10/11, [Rust](https://rustup.rs), Python 3.10+, microphone.
 
 ```powershell
-cargo build --release
+git clone https://github.com/jvit1/hermes.git
+cd hermes
+.\setup.ps1
 ```
 
-The executable will be written to:
+`setup.ps1` will:
 
-```text
-target\release\hermes.exe
-```
+1. Build `target\release\hermes.exe`
+2. Download the whisper.cpp runtime into `target\release\whisper-runtime\`
+3. Download the default **base.en** model into your local AppData folder
+4. Add `target\release` to your **user PATH** so `hermes.exe` works from any folder
+5. Run diagnostics
 
-You can also run directly from source:
+Open a **new terminal**, then:
 
 ```powershell
-cargo run --release
+hermes.exe
 ```
 
-### Manual runtime setup
-
-Place `whisper-cli.exe` and its required DLLs in:
-
-```text
-whisper-runtime\
-```
-
-The app expects the runtime DLLs to live next to `whisper-cli.exe`.
-
-If the runtime is missing, Hermes tries to download the official Windows
-`whisper.cpp` release asset automatically by calling:
+Equivalent manual command:
 
 ```powershell
-python .\scripts\ptt_tooling.py ensure-runtime --runtime-dir .\target\release\whisper-runtime
+python .\scripts\ptt_tooling.py setup
 ```
 
-You can also run that command yourself ahead of time.
-
-### Manual model setup
-
-Download the default model:
+Setup options:
 
 ```powershell
-python .\scripts\ptt_tooling.py download-model --variant medium.en
+.\setup.ps1 --no-add-path          # skip PATH update
+.\setup.ps1 --model-variant small.en
+python .\scripts\ptt_tooling.py setup --skip-build   # runtime/model only
 ```
 
-Or choose a different model:
+### From a release zip (no build)
 
-```powershell
-python .\scripts\ptt_tooling.py download-model --variant base.en
-python .\scripts\ptt_tooling.py download-model --variant small.en
-python .\scripts\ptt_tooling.py download-model --variant large-v3
-```
+1. Download the latest **Windows zip** from [GitHub Releases](https://github.com/jvit1/hermes/releases).
+2. Unzip and run `hermes.exe`.
+3. On first run, Hermes creates config and can download missing runtime/model files.
+4. Click the app where you want text, hold **Right Ctrl + Right Shift**, speak, release.
 
-You can also download a model from the Settings dialog:
+## Recommended hotkey
 
-- launch the app with `--settings` or use the tray menu
-- choose a model variant in `Download Model`
-- click `Download Selected Model`
-- the dialog will update `model_path` after the download completes
-
-### Verify the local setup
-
-```powershell
-python .\scripts\ptt_tooling.py verify-runtime
-```
-
-This checks:
-
-- the runtime directory exists
-- required DLLs are present
-- the default model path exists
-
-### Run diagnostics
-
-```powershell
-python .\scripts\ptt_tooling.py diagnose
-```
-
-Diagnostics print:
-
-- config path
-- model path
-- `whisper-cli` path
-- hotkey configuration
-- inference mode
-- language
-- microphone availability
-
-### Launch options
-
-Foreground:
-
-```powershell
-cargo run --release
-```
-
-Or, if you already built the app:
-
-```powershell
-.\target\release\hermes.exe
-```
-
-Background with hidden console:
-
-```powershell
-cargo run --release -- --background
-```
-
-Or:
-
-```powershell
-.\target\release\hermes.exe --background
-```
-
-Settings dialog:
-
-```powershell
-cargo run --release -- --settings
-```
-
-Or:
-
-```powershell
-.\target\release\hermes.exe --settings
-```
-
-## Configuration
-
-On first run, the app creates `config.toml` automatically.
-
-Current settings:
-
-- `hotkey.modifier`
-- `hotkey.key`
-- `model_path`
-- `whisper_cli_path`
-- `min_record_ms`
-- `auto_punctuation`
-- `type_output`
-- `stream_output`
-- `allow_terminal_output`
-- `language`
-
-Default values are defined in `src/config.rs`.
-
-You can edit settings by:
-
-- editing `config.toml` manually
-- opening the tray menu and choosing `Settings`
-- launching the settings dialog with `--settings`
-
-The Settings dialog uses a model dropdown for standard Whisper variants and
-stores the corresponding `model_path` internally. If the selected standard
-model is missing, Hermes can download it automatically.
-
-The settings dialog can also download model files through Python if `py` or `python` is available on `PATH`.
-
-Supported hotkey modes in the current implementation:
-
-- `none + f8`
-- `ctrl + shift` (left or right Ctrl and Shift)
-
-Example Ctrl+Shift config:
+Default in code is F8. For daily use (especially with Cursor/terminals), **Right Ctrl + Right Shift** avoids conflicting with copy/paste:
 
 ```toml
 [hotkey]
-modifier = "ctrl"
-key = "shift"
+modifier = "rctrl"
+key = "rshift"
 ```
 
-Hold both keys together to record; release both (either key up ends the recording).
+Also supported: `ctrl + shift` (any left/right), `none + f8`.
 
-Unsupported hotkey combinations currently fall back to `F8`.
+## Configuration
 
-Example config:
+Config file: `%APPDATA%\Hermes\Hermes\config\config.toml`
+
+| Setting | Purpose |
+|---------|---------|
+| `type_output` | Type/paste transcript into focused window |
+| `stream_output` | Stream stable words while hotkey is held |
+| `allow_terminal_output` | Allow dictation into terminals (uses Ctrl+Shift+V) |
+| `model_path` | Path to ggml Whisper model |
+| `hotkey.modifier` / `hotkey.key` | Push-to-talk combo |
+
+Example:
 
 ```toml
-model_path = "C:\\Users\\<you>\\AppData\\Local\\Hermes\\Hermes\\data\\models\\ggml-medium.en.bin"
+model_path = "C:\\Users\\<you>\\AppData\\Local\\Hermes\\Hermes\\data\\models\\ggml-base.en.bin"
 whisper_cli_path = "whisper-runtime\\whisper-cli.exe"
 min_record_ms = 200
 auto_punctuation = true
 type_output = true
-stream_output = false
+stream_output = true
 allow_terminal_output = false
 language = "en"
 
 [hotkey]
-modifier = "none"
-key = "f8"
+modifier = "rctrl"
+key = "rshift"
 ```
 
-`stream_output` requires `type_output = true` to have any effect. When both are enabled, Hermes types stable completed sentences while the hotkey is held, then types only the untyped remainder when you release. Each chunk goes to whichever window is focused at that moment, so keep the target app focused for best results.
+**Tips**
 
-By default Hermes ignores terminal windows as typing targets so transcripts do not land in Cursor or Windows Terminal by accident. Set `allow_terminal_output = true` to dictate into a terminal; Hermes pastes with **Ctrl+Shift+V** instead of Ctrl+V.
+- Click the **destination window first**, then hold the hotkey.
+- Terminals are ignored by default; set `allow_terminal_output = true` to dictate into Cursor terminal, Windows Terminal, etc.
+- Restart Hermes after changing settings.
 
-## Running
-
-Run the app:
+## CLI flags
 
 ```powershell
-cargo run --release
+hermes.exe                 # tray app (console visible)
+hermes.exe --background    # hide console
+hermes.exe --settings      # settings dialog
+hermes.exe --diagnose      # print setup diagnostics
 ```
 
-Run in background mode:
+## Project layout
 
-```powershell
-cargo run --release -- --background
+```
+src/                 Rust application
+scripts/             Python tooling (models, packaging, diagnostics)
+whisper-runtime/     whisper-cli.exe + DLLs
+assets/              Settings dialog script
 ```
 
-Open settings only:
-
-```powershell
-cargo run --release -- --settings
-```
-
-Run diagnostics:
-
-```powershell
-cargo run --release -- --diagnose
-```
-
-## Python Tooling
-
-Show help:
+## Python tooling
 
 ```powershell
 python .\scripts\ptt_tooling.py --help
-```
-
-Build release executable:
-
-```powershell
-python .\scripts\ptt_tooling.py build
-```
-
-Verify runtime and model:
-
-```powershell
-python .\scripts\ptt_tooling.py verify-runtime
-```
-
-Download the official whisper.cpp Windows runtime:
-
-```powershell
+python .\scripts\ptt_tooling.py download-model --variant base.en
 python .\scripts\ptt_tooling.py ensure-runtime --runtime-dir .\target\release\whisper-runtime
-```
-
-Download a model:
-
-```powershell
-python .\scripts\ptt_tooling.py download-model --variant medium.en
-```
-
-Run diagnostics against the built executable:
-
-```powershell
-python .\scripts\ptt_tooling.py diagnose
-```
-
-Install a Startup shortcut that launches the app with `--background`:
-
-```powershell
-python .\scripts\ptt_tooling.py install-startup
-```
-
-Remove the Startup shortcut:
-
-```powershell
-python .\scripts\ptt_tooling.py remove-startup
-```
-
-Build and package a distributable folder and zip:
-
-```powershell
 python .\scripts\ptt_tooling.py package --zip
 ```
 
-## Packaging
-
-The packaging flow copies:
-
-- `hermes.exe`
-- the chosen runtime directory
-- this README
-- `scripts/ptt_tooling.py`
-- startup helper scripts
-- an optional bundled model
-
-Packaged output is written under `dist/` when you run the packaging command.
-
-Packaged installs resolve relative runtime paths from the directory containing `hermes.exe`, so the default `whisper_cli_path` works when `whisper-runtime\whisper-cli.exe` is shipped next to the app binary.
-
-## Notes
-
-- This project shells out to `whisper-cli.exe`; it does not link directly to `whisper.cpp`.
-- Hermes always invokes `whisper-cli` with `-ng`, so inference runs in CPU-only mode.
-- The app writes rolling logs under the local app-data directory.
-- Settings are saved immediately, but some changes require restarting the app.
-- The current codebase is Windows-only.
-
 ## Troubleshooting
 
-If transcription fails immediately:
+**No text in the target app**
 
-- confirm `whisper_cli_path` points to a real executable
-- confirm the required DLLs are in the same directory as `whisper-cli.exe`
-- confirm `model_path` points to an existing model file
-- run `python .\scripts\ptt_tooling.py verify-runtime`
-- run `python .\scripts\ptt_tooling.py diagnose`
+- Click the text field before holding the hotkey
+- Confirm `type_output = true`
+- For terminals: `allow_terminal_output = true`
 
-If the app starts but no text appears:
+**Transcription fails**
 
-- confirm your microphone is the default Windows input device
-- confirm the target app accepts simulated paste or keyboard input
-- click the target app so it is focused before holding the hotkey
-- for live typing, set `stream_output = true` and restart Hermes after changing settings
-- to dictate into a terminal, set `allow_terminal_output = true`, click the terminal first, then hold the hotkey
-- keep the console visible and watch for runtime errors
+- Run `hermes.exe --diagnose`
+- Confirm model file and `whisper-runtime\whisper-cli.exe` exist
+
+**Terminal copy/paste broken**
+
+- Use **left** Ctrl/Shift for terminal shortcuts
+- Use **right** Ctrl/Shift only for Hermes push-to-talk
+
+## Third-party components
+
+- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** — speech recognition runtime (`whisper-cli.exe` and DLLs)
+- **Whisper models** — downloaded from Hugging Face (see `scripts/ptt_tooling.py`)
+
+Hermes shells out to `whisper-cli`; it does not embed whisper.cpp source. Follow whisper.cpp's license for those binaries.
+
+## License
+
+Copyright (c) 2026 John Vithoulkas
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+See [LICENSE](LICENSE) for the full MIT license text.

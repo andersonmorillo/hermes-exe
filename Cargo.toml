@@ -2,9 +2,10 @@
 name = "hermes"
 version = "0.1.0"
 edition = "2021"
-description = "Windows-first push-to-talk speech-to-text app built around local whisper.cpp inference"
+description = "Local push-to-talk speech-to-text for Windows using whisper.cpp"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/jvit1/hermes"
 publish = false
 
 [dependencies]
