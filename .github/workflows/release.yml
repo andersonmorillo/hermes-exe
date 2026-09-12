@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to publish. Leave empty to only build and upload the workflow artifact."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --release
+
+      - name: Download whisper runtime
+        run: python scripts/ptt_tooling.py ensure-runtime --runtime-dir whisper-runtime
+
+      - name: Package Windows zip
+        run: python scripts/ptt_tooling.py package --runtime-dir whisper-runtime --output-dir dist/hermes --zip
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-windows-x64
+          path: dist/hermes.zip
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          $tag = ""
+          if ("${{ github.ref }}".StartsWith("refs/tags/")) {
+            $tag = "${{ github.ref_name }}"
+          } elseif ("${{ github.event.inputs.release_tag }}" -ne "") {
+            $tag = "${{ github.event.inputs.release_tag }}"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub release asset
+        if: steps.release_tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.release_tag.outputs.tag }}"
+          $assetPath = "dist\hermes.zip"
+          $assetName = "hermes-$tag-windows-x64.zip"
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag "$assetPath#$assetName" --title $tag --target "${{ github.sha }}" --generate-notes
+          } else {
+            gh release upload $tag "$assetPath#$assetName" --clobber
+          }

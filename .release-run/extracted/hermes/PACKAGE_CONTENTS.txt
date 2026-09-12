@@ -1,0 +1,4 @@
+Executable: hermes.exe
+Runtime dir: whisper-runtime
+Includes tooling: scripts/ptt_tooling.py
+Includes startup helper scripts: install-startup.ps1, remove-startup.ps1
