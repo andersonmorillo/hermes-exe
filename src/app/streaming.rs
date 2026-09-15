@@ -6,7 +6,8 @@ use anyhow::Result;
 use tracing::warn;
 
 use crate::audio::capture::{AudioCaptureSession, CapturedAudio};
-use crate::stt::engine::{DecodeOptions, Transcriber, Transcript, WhisperCliTranscriber};
+use crate::stt::engine::{DecodeOptions, Transcriber, Transcript};
+use crate::stt::BackendTranscriber;
 
 const PARTIAL_WINDOW_MS: u64 = 15_000;
 const PARTIAL_INTERVAL_MS: Duration = Duration::from_millis(900);
@@ -24,7 +25,7 @@ pub struct SentenceStreamingTranscriber {
 }
 
 impl SentenceStreamingTranscriber {
-    pub fn new(transcriber: WhisperCliTranscriber, options: DecodeOptions) -> Self {
+    pub fn new(transcriber: BackendTranscriber, options: DecodeOptions) -> Self {
         let (request_tx, request_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
         let worker_handle =
@@ -92,7 +93,7 @@ impl SentenceStreamingTranscriber {
     pub fn finalize(
         mut self,
         captured: &CapturedAudio,
-        transcriber: &WhisperCliTranscriber,
+        transcriber: &impl Transcriber,
         options: &DecodeOptions,
     ) -> Result<Transcript> {
         self.collect_results();
@@ -177,7 +178,7 @@ struct WorkerResult {
 fn worker_main(
     request_rx: Receiver<WorkerRequest>,
     result_tx: Sender<WorkerResult>,
-    transcriber: WhisperCliTranscriber,
+    transcriber: BackendTranscriber,
     options: DecodeOptions,
 ) {
     while let Ok(request) = request_rx.recv() {

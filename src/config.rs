@@ -9,8 +9,15 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct AppConfig {
     pub hotkey: HotkeyConfig,
+    pub stt_backend: String,
     pub model_path: PathBuf,
     pub whisper_cli_path: PathBuf,
+    pub whisperx_python: PathBuf,
+    pub whisperx_model: String,
+    pub whisperx_language: String,
+    pub whisperx_device: String,
+    pub whisperx_compute_type: String,
+    pub whisperx_model_dir: PathBuf,
     pub min_record_ms: u64,
     pub auto_punctuation: bool,
     pub type_output: bool,
@@ -36,8 +43,15 @@ impl Default for AppConfig {
                 modifier: "none".to_string(),
                 key: "f8".to_string(),
             },
+            stt_backend: "whispercpp".to_string(),
             model_path,
             whisper_cli_path: default_whisper_cli_path(),
+            whisperx_python: default_whisperx_python_path(),
+            whisperx_model: "small".to_string(),
+            whisperx_language: "en".to_string(),
+            whisperx_device: "auto".to_string(),
+            whisperx_compute_type: "auto".to_string(),
+            whisperx_model_dir: PathBuf::new(),
             min_record_ms: 200,
             auto_punctuation: true,
             type_output: true,
@@ -84,6 +98,30 @@ impl AppConfig {
 
     pub fn resolved_whisper_cli_path(&self) -> PathBuf {
         resolve_app_relative_path(&self.whisper_cli_path)
+    }
+
+    pub fn resolved_whisperx_python_path(&self) -> PathBuf {
+        resolve_app_relative_path(&self.whisperx_python)
+    }
+
+    pub fn resolved_whisperx_model_dir(&self) -> PathBuf {
+        if self.whisperx_model_dir.as_os_str().is_empty() {
+            self.data_dir().join("whisperx-models")
+        } else {
+            resolve_app_relative_path(&self.whisperx_model_dir)
+        }
+    }
+
+    pub fn uses_whisperx(&self) -> bool {
+        self.stt_backend.eq_ignore_ascii_case("whisperx")
+    }
+
+    pub fn uses_whispercpp(&self) -> bool {
+        self.stt_backend.is_empty() || self.stt_backend.eq_ignore_ascii_case("whispercpp")
+    }
+
+    pub fn effective_stream_output(&self) -> bool {
+        self.stream_output && self.uses_whispercpp()
     }
 
     pub fn save(&self) -> Result<()> {
@@ -162,6 +200,13 @@ fn default_whisper_cli_path() -> PathBuf {
     PathBuf::from("whisper-runtime").join("whisper-cli.exe")
 }
 
+fn default_whisperx_python_path() -> PathBuf {
+    PathBuf::from("whisperx-runtime")
+        .join("venv")
+        .join("Scripts")
+        .join("python.exe")
+}
+
 fn absolute_packaged_whisper_cli_path() -> PathBuf {
     current_exe_dir()
         .map(|dir| dir.join(default_whisper_cli_path()))
@@ -217,7 +262,53 @@ key = "f8"
     #[test]
     fn default_config_omits_removed_gpu_fields() {
         let toml = toml::to_string(&AppConfig::default()).expect("default config should serialize");
-        assert!(!toml.contains("backend"));
+        assert!(!toml.contains("\nbackend ="));
         assert!(!toml.contains("gpu_layers"));
+        assert!(toml.contains("stt_backend"));
+    }
+
+    #[test]
+    fn legacy_config_defaults_to_whispercpp_backend() {
+        let config = toml::from_str::<AppConfig>(
+            r#"
+model_path = "C:\\models\\ggml-base.en.bin"
+whisper_cli_path = "whisper-runtime\\whisper-cli.exe"
+language = "en"
+
+[hotkey]
+modifier = "none"
+key = "f8"
+"#,
+        )
+        .expect("legacy config should parse");
+
+        assert!(config.uses_whispercpp());
+        assert!(!config.uses_whisperx());
+        assert!(!config.effective_stream_output());
+    }
+
+    #[test]
+    fn whisperx_config_round_trips() {
+        let config = toml::from_str::<AppConfig>(
+            r#"
+stt_backend = "whisperx"
+whisperx_model = "small"
+whisperx_device = "auto"
+whisperx_python = "whisperx-runtime\\venv\\Scripts\\python.exe"
+model_path = "C:\\models\\ggml-base.en.bin"
+whisper_cli_path = "whisper-runtime\\whisper-cli.exe"
+language = "en"
+stream_output = true
+
+[hotkey]
+modifier = "rctrl"
+key = "rshift"
+"#,
+        )
+        .expect("whisperx config should parse");
+
+        assert!(config.uses_whisperx());
+        assert!(!config.effective_stream_output());
+        assert_eq!(config.whisperx_model, "small");
     }
 }

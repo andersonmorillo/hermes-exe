@@ -32,6 +32,11 @@ MODEL_VARIANTS = {
     "large-v3": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
 }
 WHISPER_RELEASES_API = "https://api.github.com/repos/ggml-org/whisper.cpp/releases"
+WHISPERX_VERSION = "3.8.6"
+WHISPERX_MODELS = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
+TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu126"
+WHISPERX_TORCH_VERSION = "2.8.0"
+WHISPERX_TORCHAUDIO_VERSION = "2.8.0"
 RUNTIME_ARCHIVE_BY_MACHINE = {
     "amd64": "whisper-bin-x64.zip",
     "x86_64": "whisper-bin-x64.zip",
@@ -51,6 +56,18 @@ def _repo_path(path_text: str) -> Path:
     if path.is_absolute():
         return path
     return (REPO_ROOT / path).resolve()
+
+
+def _default_config_path() -> Path:
+    app_data = os.environ.get("APPDATA")
+    if not app_data:
+        raise ToolingError("APPDATA is not set; cannot resolve Hermes config path.")
+    return Path(app_data) / "Hermes" / "Hermes" / "config" / "config.toml"
+
+
+def _default_whisperx_runtime_dir(release_dir: Path | None = None) -> Path:
+    base = release_dir or (REPO_ROOT / "target" / "release")
+    return base / "whisperx-runtime"
 
 
 def _default_model_path() -> Path:
@@ -101,6 +118,41 @@ def _read_json(url: str, headers: dict[str, str] | None = None) -> object:
             return json.loads(response.read().decode("utf-8"))
     except Exception as error:
         raise ToolingError(f"Failed to fetch JSON from {url}: {error}") from error
+
+
+def _resolve_python_launcher() -> list[str]:
+    if shutil.which("py"):
+        return ["py", "-3"]
+    if shutil.which("python"):
+        return ["python"]
+    raise ToolingError(
+        "Python 3 was not found. Install Python 3 and make sure `py` or `python` is on PATH."
+    )
+
+
+def _cuda_available() -> bool:
+    if platform.system() != "Windows":
+        return False
+    if shutil.which("nvidia-smi") is None:
+        return False
+    try:
+        subprocess.run(
+            ["nvidia-smi"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
+def _venv_python(venv_dir: Path) -> Path:
+    return venv_dir / "Scripts" / "python.exe"
+
+
+def _venv_pip(venv_dir: Path) -> Path:
+    return venv_dir / "Scripts" / "pip.exe"
 
 
 def _run_command(command: list[str], cwd: Path | None = None) -> None:
@@ -390,6 +442,162 @@ def _add_user_path(directory: Path) -> bool:
         return True
 
 
+def _write_setup_config(
+    *,
+    stt_backend: str,
+    whisperx_model: str,
+    release_dir: Path,
+) -> Path:
+    config_path = _default_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    model_path = _default_model_path().with_name("ggml-base.en.bin")
+    model_path_text = str(model_path).replace("\\", "\\\\")
+    lines = [
+        f'stt_backend = "{stt_backend}"',
+        f'model_path = "{model_path_text}"',
+        'whisper_cli_path = "whisper-runtime\\\\whisper-cli.exe"',
+        'whisperx_python = "whisperx-runtime\\\\venv\\\\Scripts\\\\python.exe"',
+        f'whisperx_model = "{whisperx_model}"',
+        'whisperx_language = "en"',
+        'whisperx_device = "auto"',
+        'whisperx_compute_type = "auto"',
+        'whisperx_model_dir = ""',
+        "min_record_ms = 200",
+        "auto_punctuation = true",
+        "type_output = true",
+        "stream_output = false",
+        "allow_terminal_output = false",
+        'language = "en"',
+        "",
+        "[hotkey]",
+        'modifier = "rctrl"',
+        'key = "rshift"',
+        "",
+    ]
+    config_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Wrote setup config: {config_path}")
+    return config_path
+
+
+def cmd_ensure_whisperx(args: argparse.Namespace) -> None:
+    if platform.system() != "Windows":
+        raise ToolingError("WhisperX setup is Windows-only.")
+
+    runtime_dir = _repo_path(args.runtime_dir)
+    venv_dir = runtime_dir / "venv"
+    python_path = _venv_python(venv_dir)
+
+    if not args.force and python_path.exists():
+        try:
+            cmd_verify_whisperx(
+                argparse.Namespace(runtime_dir=str(runtime_dir), require_cuda=args.require_cuda)
+            )
+            print(f"WhisperX runtime already available: {runtime_dir}")
+            return
+        except ToolingError:
+            print("Existing WhisperX runtime failed verification; reinstalling.")
+
+    if venv_dir.exists() and args.force:
+        shutil.rmtree(venv_dir)
+
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    launcher = _resolve_python_launcher()
+    _run_command([*launcher, "-m", "venv", str(venv_dir)])
+
+    pip_path = _venv_pip(venv_dir)
+    if not pip_path.exists():
+        raise ToolingError(f"venv pip was not created at {pip_path}")
+
+    try:
+        _run_command([str(python_path), "-m", "pip", "install", "--upgrade", "pip"])
+    except subprocess.CalledProcessError:
+        print("pip upgrade skipped; continuing with the venv's existing pip.")
+
+    use_cuda = _cuda_available()
+    if use_cuda:
+        print("CUDA detected; installing GPU-enabled PyTorch wheels.")
+        _run_command(
+            [
+                str(pip_path),
+                "install",
+                f"torch=={WHISPERX_TORCH_VERSION}",
+                f"torchaudio=={WHISPERX_TORCHAUDIO_VERSION}",
+                "--index-url",
+                TORCH_CUDA_INDEX,
+            ]
+        )
+    else:
+        print("CUDA not detected; installing CPU PyTorch wheels.")
+        _run_command([str(pip_path), "install", "torch", "torchaudio"])
+
+    _run_command(
+        [
+            str(pip_path),
+            "install",
+            f"whisperx=={WHISPERX_VERSION}",
+            "--no-deps",
+        ]
+    )
+    _run_command(
+        [
+            str(pip_path),
+            "install",
+            "faster-whisper",
+            "ctranslate2",
+            "pandas",
+            "nltk",
+            "pyannote-audio",
+            "transformers",
+        ]
+    )
+    if use_cuda:
+        print("Ensuring GPU PyTorch remains active after WhisperX install.")
+        _run_command(
+            [
+                str(pip_path),
+                "install",
+                f"torch=={WHISPERX_TORCH_VERSION}",
+                f"torchaudio=={WHISPERX_TORCHAUDIO_VERSION}",
+                "--index-url",
+                TORCH_CUDA_INDEX,
+            ]
+        )
+    cmd_verify_whisperx(
+        argparse.Namespace(runtime_dir=str(runtime_dir), require_cuda=args.require_cuda)
+    )
+    print(f"WhisperX runtime saved to: {runtime_dir}")
+
+
+def cmd_verify_whisperx(args: argparse.Namespace) -> None:
+    runtime_dir = _repo_path(args.runtime_dir)
+    python_path = _venv_python(runtime_dir / "venv")
+    if not python_path.exists():
+        raise ToolingError(
+            f"WhisperX python not found at {python_path}. Run `ensure-whisperx` first."
+        )
+
+    _run_command(
+        [
+            str(python_path),
+            "-c",
+            "import whisperx; import torch; print('whisperx: ok'); "
+            "print('cuda:', torch.cuda.is_available())",
+        ]
+    )
+    if args.require_cuda:
+        result = subprocess.run(
+            [
+                str(python_path),
+                "-c",
+                "import torch; import sys; sys.exit(0 if torch.cuda.is_available() else 1)",
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            raise ToolingError("CUDA is required but torch.cuda.is_available() returned False.")
+
+
 def cmd_setup(args: argparse.Namespace) -> None:
     if platform.system() != "Windows":
         raise ToolingError("Hermes setup is Windows-only.")
@@ -402,10 +610,21 @@ def cmd_setup(args: argparse.Namespace) -> None:
 
     release_dir = REPO_ROOT / "target" / "release"
     runtime_dir = release_dir / "whisper-runtime"
+    whisperx_runtime_dir = _default_whisperx_runtime_dir(release_dir)
     exe_path = release_dir / "hermes.exe"
+    stt_backend = args.stt_backend
 
     if not args.skip_build:
         cmd_build(args)
+
+    if stt_backend == "whisperx" and not args.skip_whisperx:
+        cmd_ensure_whisperx(
+            argparse.Namespace(
+                runtime_dir=str(whisperx_runtime_dir),
+                force=False,
+                require_cuda=False,
+            )
+        )
 
     if not args.skip_runtime:
         cmd_ensure_runtime(
@@ -417,7 +636,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
             )
         )
 
-    if not args.skip_model:
+    if not args.skip_model and stt_backend != "whisperx":
         try:
             cmd_download_model(
                 argparse.Namespace(
@@ -435,6 +654,12 @@ def cmd_setup(args: argparse.Namespace) -> None:
 
     if not exe_path.exists():
         raise ToolingError(f"Build did not produce {exe_path}")
+
+    _write_setup_config(
+        stt_backend=stt_backend,
+        whisperx_model=args.whisperx_model,
+        release_dir=release_dir,
+    )
 
     if args.add_path:
         if _add_user_path(release_dir):
@@ -580,6 +805,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip cargo build --release.",
     )
     parser_setup.add_argument(
+        "--stt-backend",
+        choices=("whisperx", "whispercpp"),
+        default="whisperx",
+        help="Default speech-to-text backend written to config (default: whisperx).",
+    )
+    parser_setup.add_argument(
+        "--skip-whisperx",
+        action="store_true",
+        help="Skip WhisperX runtime setup.",
+    )
+    parser_setup.add_argument(
+        "--with-whispercpp",
+        action="store_true",
+        help="Also install whisper.cpp runtime when using WhisperX.",
+    )
+    parser_setup.add_argument(
         "--skip-runtime",
         action="store_true",
         help="Skip whisper.cpp runtime download.",
@@ -587,7 +828,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_setup.add_argument(
         "--skip-model",
         action="store_true",
-        help="Skip default model download.",
+        help="Skip default ggml model download.",
+    )
+    parser_setup.add_argument(
+        "--whisperx-model",
+        choices=WHISPERX_MODELS,
+        default="small",
+        help="Default WhisperX model written to config (default: small).",
     )
     parser_setup.add_argument(
         "--model-variant",
@@ -648,6 +895,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Redownload the runtime even if the required files already exist.",
     )
     parser_runtime.set_defaults(func=cmd_ensure_runtime)
+
+    parser_whisperx = subparsers.add_parser(
+        "ensure-whisperx",
+        help="Create a WhisperX Python venv with GPU-enabled PyTorch when CUDA is available.",
+    )
+    parser_whisperx.add_argument(
+        "--runtime-dir",
+        default="target/release/whisperx-runtime",
+        help="Directory where the WhisperX venv should be created.",
+    )
+    parser_whisperx.add_argument(
+        "--force",
+        action="store_true",
+        help="Recreate the WhisperX venv even if it already exists.",
+    )
+    parser_whisperx.add_argument(
+        "--require-cuda",
+        action="store_true",
+        help="Fail verification when CUDA is not available.",
+    )
+    parser_whisperx.set_defaults(func=cmd_ensure_whisperx, require_cuda=False)
+
+    parser_verify_whisperx = subparsers.add_parser(
+        "verify-whisperx",
+        help="Verify the WhisperX venv imports and report CUDA availability.",
+    )
+    parser_verify_whisperx.add_argument(
+        "--runtime-dir",
+        default="target/release/whisperx-runtime",
+        help="Directory containing the WhisperX venv.",
+    )
+    parser_verify_whisperx.add_argument(
+        "--require-cuda",
+        action="store_true",
+        help="Fail when CUDA is not available.",
+    )
+    parser_verify_whisperx.set_defaults(func=cmd_verify_whisperx, require_cuda=False)
 
     parser_install = subparsers.add_parser("install-startup", help="Create a Startup shortcut for the executable.")
     parser_install.add_argument(

@@ -15,7 +15,9 @@ use crate::platform::windows::{
     play_recording_stop_beep, pump_message_queue, show_error_dialog, ForegroundTarget,
     TrayStatus, WindowsTray,
 };
-use crate::stt::engine::{DecodeOptions, WhisperCliTranscriber};
+use crate::stt::engine::{DecodeOptions, Transcriber};
+use crate::stt::whisperx::probe_cuda;
+use crate::stt::{create_transcriber, BackendTranscriber};
 
 mod state;
 mod streaming;
@@ -32,7 +34,10 @@ pub fn run(config: AppConfig) -> Result<()> {
     tray.set_status(TrayStatus::Idle);
 
     let hotkey_listener = HotkeyListener::start(config.hotkey.clone())?;
-    let transcriber = WhisperCliTranscriber::new(&config)?;
+    let transcriber = create_transcriber(&config)?;
+    if config.stream_output && config.uses_whisperx() {
+        info!("stream_output is disabled while stt_backend=whisperx (WhisperX uses release-only transcription in v1)");
+    }
     let mut audio_capture: Option<AudioCapture> = None;
     let typer = TextTyper::new();
 
@@ -42,7 +47,7 @@ pub fn run(config: AppConfig) -> Result<()> {
 
     let mut current_session: Option<AudioCaptureSession> = None;
     let mut sentence_stream: Option<SentenceStreamingTranscriber> = None;
-    let live_typing = config.type_output && config.stream_output;
+    let live_typing = config.type_output && config.effective_stream_output();
     let mut typed_output = String::new();
     let mut recording_target: Option<ForegroundTarget> = None;
 
@@ -101,10 +106,14 @@ pub fn run(config: AppConfig) -> Result<()> {
                                     let _ = io::stdout().flush();
                                 }
                                 current_session = Some(session);
-                                sentence_stream = Some(SentenceStreamingTranscriber::new(
-                                    transcriber.clone(),
-                                    decode_options.clone(),
-                                ));
+                                sentence_stream = if config.effective_stream_output() {
+                                    Some(SentenceStreamingTranscriber::new(
+                                        transcriber.clone(),
+                                        decode_options.clone(),
+                                    ))
+                                } else {
+                                    None
+                                };
                                 state.set_phase(AppPhase::Recording);
                                 tray.set_status(TrayStatus::Recording);
                                 play_recording_start_beep();
@@ -152,17 +161,12 @@ pub fn run(config: AppConfig) -> Result<()> {
 
                         state.set_phase(AppPhase::Transcribing);
                         tray.set_status(TrayStatus::Transcribing);
-                        let transcript = match sentence_stream
-                            .take()
-                            .unwrap_or_else(|| {
-                                SentenceStreamingTranscriber::new(
-                                    transcriber.clone(),
-                                    decode_options.clone(),
-                                )
-                            })
-                            .finalize(&captured, &transcriber, &decode_options)
-                            .context("transcription failed")
-                        {
+                        let transcript = match transcribe_release(
+                            sentence_stream.take(),
+                            &captured,
+                            &transcriber,
+                            &decode_options,
+                        ) {
                             Ok(transcript) => transcript,
                             Err(err) => {
                                 error!("{err:#}");
@@ -256,25 +260,57 @@ pub fn open_settings_once() -> Result<()> {
 pub fn run_diagnostics(config: &AppConfig) -> Result<()> {
     println!("Hermes diagnostics");
     println!("config path: {}", AppConfig::config_path().display());
-    println!("model path: {}", config.model_path.display());
-    println!(
-        "whisper-cli path: {}",
-        config.resolved_whisper_cli_path().display()
-    );
+    println!("stt backend: {}", config.stt_backend);
     println!("hotkey: {}+{}", config.hotkey.modifier, config.hotkey.key);
-    println!("inference mode: cpu_only");
     println!("language: {}", config.language);
+    println!(
+        "stream output effective: {}",
+        config.effective_stream_output()
+    );
 
-    if config.model_path.exists() {
-        println!("model file: OK");
+    if config.uses_whisperx() {
+        let python_path = config.resolved_whisperx_python_path();
+        println!("whisperx python: {}", python_path.display());
+        println!("whisperx model: {}", config.whisperx_model);
+        println!(
+            "whisperx model dir: {}",
+            config.resolved_whisperx_model_dir().display()
+        );
+        println!(
+            "whisperx python binary: {}",
+            if python_path.exists() { "OK" } else { "MISSING" }
+        );
+        println!(
+            "cuda available: {}",
+            if probe_cuda(&python_path) {
+                "YES"
+            } else {
+                "NO"
+            }
+        );
     } else {
-        println!("model file: MISSING");
-    }
-
-    if config.resolved_whisper_cli_path().exists() {
-        println!("whisper-cli binary: OK");
-    } else {
-        println!("whisper-cli binary: MISSING");
+        println!("model path: {}", config.model_path.display());
+        println!(
+            "whisper-cli path: {}",
+            config.resolved_whisper_cli_path().display()
+        );
+        println!("inference mode: cpu_only");
+        println!(
+            "model file: {}",
+            if config.model_path.exists() {
+                "OK"
+            } else {
+                "MISSING"
+            }
+        );
+        println!(
+            "whisper-cli binary: {}",
+            if config.resolved_whisper_cli_path().exists() {
+                "OK"
+            } else {
+                "MISSING"
+            }
+        );
     }
 
     let audio = AudioCapture::new();
@@ -285,6 +321,23 @@ pub fn run_diagnostics(config: &AppConfig) -> Result<()> {
 
     println!("diagnostics complete");
     Ok(())
+}
+
+fn transcribe_release(
+    sentence_stream: Option<SentenceStreamingTranscriber>,
+    captured: &crate::audio::capture::CapturedAudio,
+    transcriber: &BackendTranscriber,
+    options: &DecodeOptions,
+) -> Result<crate::stt::engine::Transcript> {
+    if let Some(stream) = sentence_stream {
+        return stream
+            .finalize(captured, transcriber, options)
+            .context("transcription failed");
+    }
+
+    transcriber
+        .transcribe(&captured.pcm_16khz_mono, options)
+        .context("transcription failed")
 }
 
 fn validate_startup_paths(config: &AppConfig) -> Result<()> {

@@ -47,6 +47,12 @@ pub fn open_settings_dialog(config: &AppConfig) -> Result<Option<AppConfig>> {
             .arg(config.stream_output.to_string())
             .arg("-AllowTerminalOutput")
             .arg(config.allow_terminal_output.to_string())
+            .arg("-SttBackend")
+            .arg(&config.stt_backend)
+            .arg("-WhisperxModel")
+            .arg(&config.whisperx_model)
+            .arg("-WhisperxPython")
+            .arg(config.whisperx_python.to_string_lossy().to_string())
             .output()
             .context("failed to launch settings dialog via PowerShell")
     })();

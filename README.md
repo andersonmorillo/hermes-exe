@@ -1,13 +1,13 @@
 # Hermes
 
-**Local push-to-talk dictation for Windows.** Hold a hotkey, speak, and Hermes transcribes with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your machine — then types the text into the window you selected.
+**Local push-to-talk dictation for Windows.** Hold a hotkey, speak, and Hermes transcribes on your machine — then types the text into the window you selected. Default setup uses **[WhisperX](https://github.com/m-bain/whisperx)** with GPU when available; [whisper.cpp](https://github.com/ggml-org/whisper.cpp) remains available as a CPU fallback.
 
 MIT licensed. Copyright (c) 2026 John Vithoulkas. See [LICENSE](LICENSE).
 
 ## What it does
 
 - **Push-to-talk** — hold hotkey to record, release to transcribe
-- **Fully local** — CPU inference via `whisper-cli.exe`; no cloud API
+- **Fully local** — WhisperX (GPU) or whisper.cpp (CPU); no cloud API
 - **Types for you** — pastes into the focused app (Ctrl+V, or Ctrl+Shift+V in terminals)
 - **Live streaming** — optional word-by-word output while you still hold the hotkey
 - **Audio cues** — beep when recording starts and stops
@@ -17,7 +17,7 @@ MIT licensed. Copyright (c) 2026 John Vithoulkas. See [LICENSE](LICENSE).
 
 ### Clone and set up (recommended for developers)
 
-**Requirements:** Windows 10/11, [Rust](https://rustup.rs), Python 3.10+, microphone.
+**Requirements:** Windows 10/11, [Rust](https://rustup.rs), Python 3.10+, microphone. **NVIDIA GPU recommended** for WhisperX default backend.
 
 ```powershell
 git clone https://github.com/jvit1/hermes.git
@@ -28,10 +28,11 @@ cd hermes
 `setup.ps1` will:
 
 1. Build `target\release\hermes.exe`
-2. Download the whisper.cpp runtime into `target\release\whisper-runtime\`
-3. Download the default **base.en** model into your local AppData folder
-4. Add `target\release` to your **user PATH** so `hermes.exe` works from any folder
-5. Run diagnostics
+2. Create a WhisperX Python venv in `target\release\whisperx-runtime\` (GPU PyTorch when CUDA is detected)
+3. Download the whisper.cpp runtime into `target\release\whisper-runtime\` (fallback backend)
+4. Write config with `stt_backend = "whisperx"` and default model **`small`**
+5. Add `target\release` to your **user PATH** so `hermes.exe` works from any folder
+6. Run diagnostics
 
 Open a **new terminal**, then:
 
@@ -48,9 +49,11 @@ python .\scripts\ptt_tooling.py setup
 Setup options:
 
 ```powershell
-.\setup.ps1 --no-add-path          # skip PATH update
-.\setup.ps1 --model-variant small.en
-python .\scripts\ptt_tooling.py setup --skip-build   # runtime/model only
+.\setup.ps1 --no-add-path                       # skip PATH update
+python .\scripts\ptt_tooling.py setup --stt-backend whispercpp --model-variant base.en
+python .\scripts\ptt_tooling.py setup --skip-build --skip-whisperx
+python .\scripts\ptt_tooling.py ensure-whisperx # WhisperX runtime only
+python .\scripts\ptt_tooling.py verify-whisperx
 ```
 
 ### From a release zip (no build)
@@ -78,21 +81,28 @@ Config file: `%APPDATA%\Hermes\Hermes\config\config.toml`
 
 | Setting | Purpose |
 |---------|---------|
+| `stt_backend` | `whisperx` (default after setup) or `whispercpp` |
+| `whisperx_model` | WhisperX model: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3` |
+| `whisperx_python` | Path to WhisperX venv python (default beside exe) |
 | `type_output` | Type/paste transcript into focused window |
-| `stream_output` | Stream stable words while hotkey is held |
+| `stream_output` | Stream stable words while hotkey is held (**whisper.cpp only**) |
 | `allow_terminal_output` | Allow dictation into terminals (uses Ctrl+Shift+V) |
-| `model_path` | Path to ggml Whisper model |
+| `model_path` | Path to ggml Whisper model (whisper.cpp backend) |
 | `hotkey.modifier` / `hotkey.key` | Push-to-talk combo |
 
 Example:
 
 ```toml
+stt_backend = "whisperx"
+whisperx_python = "whisperx-runtime\\venv\\Scripts\\python.exe"
+whisperx_model = "small"
+whisperx_device = "auto"
 model_path = "C:\\Users\\<you>\\AppData\\Local\\Hermes\\Hermes\\data\\models\\ggml-base.en.bin"
 whisper_cli_path = "whisper-runtime\\whisper-cli.exe"
 min_record_ms = 200
 auto_punctuation = true
 type_output = true
-stream_output = true
+stream_output = false
 allow_terminal_output = false
 language = "en"
 
@@ -100,6 +110,13 @@ language = "en"
 modifier = "rctrl"
 key = "rshift"
 ```
+
+### Backend comparison
+
+| Backend | Hardware | Live streaming | Best for |
+|---------|----------|----------------|----------|
+| **WhisperX** (default) | GPU preferred | No (release-only in v1) | Better quality + faster on NVIDIA GPU |
+| **whisper.cpp** | CPU only | Yes | Lightweight fallback, live streaming |
 
 **Tips**
 

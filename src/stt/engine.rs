@@ -68,7 +68,8 @@ impl Transcriber for WhisperCliTranscriber {
         write_wav_f32_16khz(&wav_path, pcm_mono_16khz)?;
 
         let result = self.run_whisper(&wav_path, &out_prefix, options);
-        cleanup_temp_files(&wav_path, &out_prefix);
+        cleanup_transcript_artifacts(&wav_path);
+        cleanup_transcript_artifacts(out_prefix.as_path());
         let text = result?;
         Ok(Transcript {
             text: normalize_transcript(&text),
@@ -141,7 +142,7 @@ impl WhisperCliTranscriber {
     }
 }
 
-fn write_wav_f32_16khz(path: &Path, pcm: &[f32]) -> Result<()> {
+pub(crate) fn write_wav_f32_16khz(path: &Path, pcm: &[f32]) -> Result<()> {
     let spec = WavSpec {
         channels: 1,
         sample_rate: 16_000,
@@ -158,20 +159,16 @@ fn write_wav_f32_16khz(path: &Path, pcm: &[f32]) -> Result<()> {
     Ok(())
 }
 
-fn cleanup_temp_files(wav_path: &Path, out_prefix: &Path) {
-    let _ = fs::remove_file(wav_path);
-    let _ = fs::remove_file(wav_path.with_extension("txt"));
-    let _ = fs::remove_file(wav_path.with_extension("json"));
-    let _ = fs::remove_file(wav_path.with_extension("vtt"));
-    let _ = fs::remove_file(wav_path.with_extension("srt"));
-    let _ = fs::remove_file(PathBuf::from(format!("{}.txt", wav_path.display())));
-    let _ = fs::remove_file(PathBuf::from(format!("{}.json", wav_path.display())));
-    let _ = fs::remove_file(PathBuf::from(format!("{}.vtt", wav_path.display())));
-    let _ = fs::remove_file(PathBuf::from(format!("{}.srt", wav_path.display())));
-    let _ = fs::remove_file(out_prefix.with_extension("txt"));
-    let _ = fs::remove_file(out_prefix.with_extension("json"));
-    let _ = fs::remove_file(out_prefix.with_extension("vtt"));
-    let _ = fs::remove_file(out_prefix.with_extension("srt"));
+pub(crate) fn cleanup_transcript_artifacts(base: &Path) {
+    let _ = fs::remove_file(base);
+    let _ = fs::remove_file(base.with_extension("txt"));
+    let _ = fs::remove_file(base.with_extension("json"));
+    let _ = fs::remove_file(base.with_extension("vtt"));
+    let _ = fs::remove_file(base.with_extension("srt"));
+    let _ = fs::remove_file(PathBuf::from(format!("{}.txt", base.display())));
+    let _ = fs::remove_file(PathBuf::from(format!("{}.json", base.display())));
+    let _ = fs::remove_file(PathBuf::from(format!("{}.vtt", base.display())));
+    let _ = fs::remove_file(PathBuf::from(format!("{}.srt", base.display())));
 }
 
 fn resolve_transcript_path(wav_path: &Path, out_prefix: &Path) -> Option<PathBuf> {
@@ -200,7 +197,7 @@ fn candidate_output_paths(wav_path: &Path, out_prefix: &Path) -> Vec<PathBuf> {
     candidates
 }
 
-fn normalize_transcript(text: &str) -> String {
+pub(crate) fn normalize_transcript(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -443,7 +440,7 @@ fn known_model_variant(model_path: &Path) -> Option<&'static str> {
     }
 }
 
-fn python_launchers() -> [(&'static str, &'static [&'static str]); 2] {
+pub(crate) fn python_launchers() -> [(&'static str, &'static [&'static str]); 2] {
     [("py", &["-3"]), ("python", &[])]
 }
 

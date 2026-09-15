@@ -20,7 +20,13 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$StreamOutput,
     [Parameter(Mandatory = $true)]
-    [string]$AllowTerminalOutput
+    [string]$AllowTerminalOutput,
+    [Parameter(Mandatory = $true)]
+    [string]$SttBackend,
+    [Parameter(Mandatory = $true)]
+    [string]$WhisperxModel,
+    [Parameter(Mandatory = $true)]
+    [string]$WhisperxPython
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,7 +37,7 @@ Add-Type -AssemblyName System.Drawing
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Hermes Settings"
 $form.StartPosition = "CenterScreen"
-$form.ClientSize = New-Object System.Drawing.Size(680, 564)
+$form.ClientSize = New-Object System.Drawing.Size(680, 640)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.MinimizeBox = $false
@@ -49,6 +55,8 @@ $script:downloadStderrPath = $null
 $script:currentCustomModelPath = $ModelPath
 $script:saveAfterDownload = $false
 $script:knownModelVariants = @("tiny.en", "base.en", "small.en", "medium.en", "large-v3", "custom")
+$script:knownWhisperxModels = @("tiny", "base", "small", "medium", "large-v2", "large-v3")
+$script:knownBackends = @("whisperx", "whispercpp")
 
 function Set-DownloadUiState {
     param(
@@ -296,9 +304,24 @@ function Complete-Save {
     $streamOutputValue = if ($streamOutputBox.Checked) { "true" } else { "false" }
     $allowTerminalOutputValue = if ($allowTerminalOutputBox.Checked) { "true" } else { "false" }
 
+    $sttBackend = $sttBackendCombo.SelectedItem.ToString()
+    $whisperxModel = $whisperxModelCombo.SelectedItem.ToString()
+    $whisperxPython = $whisperxPythonBox.Text.Trim()
+    if ([string]::IsNullOrWhiteSpace($whisperxPython)) {
+        [System.Windows.Forms.MessageBox]::Show("WhisperX python path cannot be empty.", "Hermes Settings")
+        return
+    }
+
     $tomlLines = @(
+        "stt_backend = `"$($(Escape-TomlString $sttBackend))`"",
         "model_path = `"$($(Escape-TomlString $modelPath))`"",
         "whisper_cli_path = `"$($(Escape-TomlString $whisperCliPath))`"",
+        "whisperx_python = `"$($(Escape-TomlString $whisperxPython))`"",
+        "whisperx_model = `"$($(Escape-TomlString $whisperxModel))`"",
+        'whisperx_language = "en"',
+        'whisperx_device = "auto"',
+        'whisperx_compute_type = "auto"',
+        'whisperx_model_dir = ""',
         "min_record_ms = $minRecordMs",
         "auto_punctuation = $autoPunctuationValue",
         "type_output = $typeOutputValue",
@@ -331,9 +354,30 @@ function Resolve-PythonCommand {
     throw "Python 3 was not found. Install Python and make sure `py` or `python` is on PATH."
 }
 
+function Update-BackendUi {
+    $isWhisperx = ($sttBackendCombo.SelectedItem.ToString() -eq "whisperx")
+    $modelVariantCombo.Enabled = -not $isWhisperx
+    $whisperxModelCombo.Enabled = $isWhisperx
+    $downloadModelButton.Enabled = -not $isWhisperx
+    $streamOutputBox.Enabled = -not $isWhisperx
+    if ($isWhisperx -and $streamOutputBox.Checked) {
+        $streamOutputBox.Checked = $false
+    }
+    if ($isWhisperx) {
+        $note.Text = "WhisperX uses GPU when available. Live stream output is only available with whisper.cpp."
+    } else {
+        $note.Text = "whisper.cpp runs in CPU-only mode. Standard ggml models are stored in your local app data folder."
+    }
+}
+
 $selectedModelVariant = Get-ModelVariantFromPath $ModelPath
+$selectedBackend = if ($script:knownBackends -contains $SttBackend) { $SttBackend } else { "whispercpp" }
+$selectedWhisperxModel = if ($script:knownWhisperxModels -contains $WhisperxModel) { $WhisperxModel } else { "small" }
+$sttBackendCombo = Add-ComboField "STT Backend" $script:knownBackends $selectedBackend
 $whisperCliPathBox = Add-TextField "Whisper CLI Path" $WhisperCliPath
-$modelVariantCombo = Add-ComboField "Model" $script:knownModelVariants $selectedModelVariant
+$whisperxPythonBox = Add-TextField "WhisperX Python" $WhisperxPython
+$modelVariantCombo = Add-ComboField "whisper.cpp Model" $script:knownModelVariants $selectedModelVariant
+$whisperxModelCombo = Add-ComboField "WhisperX Model" $script:knownWhisperxModels $selectedWhisperxModel
 $languageBox = Add-TextField "Language" $Language
 $hotkeyModifierBox = Add-TextField "Hotkey Modifier" $HotkeyModifier
 $hotkeyKeyBox = Add-TextField "Hotkey Key" $HotkeyKey
@@ -346,7 +390,7 @@ $streamOutputBox = Add-CheckField "Stream Output While Recording" ($StreamOutput
 $allowTerminalOutputBox = Add-CheckField "Allow Terminal Output (Ctrl+Shift+V)" ($AllowTerminalOutput.ToLowerInvariant() -eq "true")
 
 $note = New-Object System.Windows.Forms.Label
-$note.Text = "Choose a model variant here. Hermes runs whisper-cli in CPU-only mode and stores standard models in your local app data folder."
+$note.Text = "Choose a backend and model. WhisperX prefers GPU; whisper.cpp is CPU-only."
 $note.AutoSize = $false
 $note.Location = New-Object System.Drawing.Point(10, ($rowY + 4))
 $note.Size = New-Object System.Drawing.Size(650, 30)
@@ -565,7 +609,9 @@ $saveButton.Add_Click({
 $form.Controls.Add($saveButton)
 $form.Controls.Add($cancelButton)
 
+$sttBackendCombo.Add_SelectedIndexChanged({ Update-BackendUi })
 Update-ModelSelectionUi
+Update-BackendUi
 
 $null = $form.ShowDialog()
 if ($form.DialogResult -eq [System.Windows.Forms.DialogResult]::OK -and $form.Tag) {
